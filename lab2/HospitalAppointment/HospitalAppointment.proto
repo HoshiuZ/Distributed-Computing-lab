@@ -3,7 +3,7 @@ syntax = 'proto3';
 message Appointment{
   int32 appointmentId = 1;
   string patientName = 2;
-  string dockerName = 3;
+  string doctorName = 3;
   string department = 4;
   string date = 5;
   string timeSlot = 6;
@@ -25,9 +25,15 @@ message AppointmentList{
   repeated Appointment appointments = 1;
 }
 
+message Empty{}
+
+message StorageSize{
+    int32 size = 1;
+}
 service AppointmentService{
   rpc bookAppointment(Appointment) returns (BoolResult);
   rpc queryById(AppointmentId) returns (Appointment);
   rpc queryByPatient(PatientName) returns (AppointmentList);
   rpc cancelAppointment(AppointmentId) returns (BoolResult);
+  rpc getStorageSize(Empty) returns (StorageSize);
 }
