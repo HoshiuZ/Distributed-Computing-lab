@@ -4,6 +4,8 @@ public class LogEntry {
     public String log_level;
     public String message;
 
+    public LogEntry() {}
+
     public LogEntry(String device_id, String timestamp, String log_level, String message) {
         this.device_id = device_id;
         this.timestamp = timestamp;

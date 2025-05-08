@@ -32,7 +32,7 @@ public class Publisher {
     }
 
     public void sendMessage() throws JMSException {
-        Destination destination = session.createQueue("log");
+        Destination destination = session.createQueue("logs");
         ObjectMapper mapper = new ObjectMapper();
         Random random = new Random();
         String[] levels = {"INFO", "WARN", "ERROR"};
