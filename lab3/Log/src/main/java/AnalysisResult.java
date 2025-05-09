@@ -4,7 +4,7 @@ public class AnalysisResult {
     public double warningRatio;
     public String lastErrorTime;
 
-    public AnalysisResult(String device_id, double errorRatio, double warningRatio, String lastErrorTimeStamp) {
+    public AnalysisResult(String device_id, double errorRatio, double warningRatio, String lastErrorTime) {
         this.device_id = device_id;
         this.errorRatio = errorRatio;
         this.warningRatio = warningRatio;

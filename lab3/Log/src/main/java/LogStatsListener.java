@@ -3,25 +3,49 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.jms.*;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 public class LogStatsListener implements MessageListener {
-    private static final int N = 20;
+    private static final int N = 200;
     private static final int T = 5;
-    private static final int S = 10;
+    private static final int S = 1;
 
     private Map<String, Deque<LogEntry>> deviceLogs = new ConcurrentHashMap<>();
-    private Map<String, String> lastErrorTimeStamp = new ConcurrentHashMap<>();
+    private Map<String, String> lastErrorTimestamp = new ConcurrentHashMap<>();
+    private Map<String, Integer> errorCount = new ConcurrentHashMap<>();
+    private Map<String, Integer> warnCount = new ConcurrentHashMap<>();
+    private Map<String, Deque<LogEntry>> deviceLogsWithinSSeconds = new ConcurrentHashMap<>();
+    private Map<String, Integer> errorCountWithinSSeconds = new ConcurrentHashMap<>();
     private Session session;
     private MessageProducer producer1, producer2;
 
-    public LogStatsListener(Session session, MessageProducer producer1, MessageProducer Producer2) throws JMSException {
+    private static class TimedLogEntry{
+        long timestamp;
+        String logLevel;
+
+        TimedLogEntry(long timestamp, String logLevel){
+            this.timestamp = timestamp;
+            this.logLevel = logLevel;
+        }
+    }
+
+    private static class TimeUtil{
+        private static final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+        public static long toTimestampMillis(String timeStr){
+            LocalDateTime localDateTime = LocalDateTime.parse(timeStr, formatter);
+            return localDateTime.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        }
+    }
+
+    public LogStatsListener(Session session, MessageProducer producer1, MessageProducer producer2) throws JMSException {
         this.session = session;
         this.producer1 = session.createProducer(session.createQueue("analysisResults"));
         this.producer2 = session.createProducer(session.createQueue("criticalAlerts"));
@@ -45,18 +69,45 @@ public class LogStatsListener implements MessageListener {
             }
 
             String deviceId = log.device_id;
-
-            deviceLogs.putIfAbsent(deviceId, new ArrayDeque<>());
+            deviceLogs.putIfAbsent(deviceId, new ConcurrentLinkedDeque<>());
             Deque<LogEntry> logs = deviceLogs.get(deviceId);
 
-            synchronized(logs) {
-                if(logs.size() >= N) {
-                    logs.pollFirst();
+            if(logs.size() >= N) {
+                LogEntry removedLog = logs.pollFirst();
+                if("ERROR".equalsIgnoreCase(removedLog.log_level)) {
+                    errorCount.put(deviceId, errorCount.get(deviceId) - 1);
+                } else if("WARN".equalsIgnoreCase(removedLog.log_level)) {
+                    warnCount.put(deviceId, warnCount.get(deviceId) - 1);
                 }
-                logs.addLast(log);
             }
+            logs.addLast(log);
+
             if("ERROR".equalsIgnoreCase(log.log_level)) {
-                lastErrorTimeStamp.put(deviceId, log.timestamp);
+                errorCount.put(deviceId, errorCount.getOrDefault(deviceId, 0) + 1);
+                lastErrorTimestamp.put(deviceId, log.timestamp);
+            } else if("WARN".equalsIgnoreCase(log.log_level)) {
+                warnCount.put(deviceId, warnCount.getOrDefault(deviceId, 0) + 1);
+            }
+
+            deviceLogsWithinSSeconds.putIfAbsent(deviceId, new ConcurrentLinkedDeque<>());
+            logs = deviceLogsWithinSSeconds.get(deviceId);
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            LocalDateTime now = LocalDateTime.now();
+            while(!logs.isEmpty()) {
+                LogEntry firstLog = logs.peekFirst();
+                LocalDateTime firstTime = LocalDateTime.parse(firstLog.timestamp, formatter);
+                if(java.time.Duration.between(firstTime, now).getSeconds() > S) {
+                    LogEntry removedLog = logs.pollFirst();
+                    if("ERROR".equalsIgnoreCase(removedLog.log_level)) {
+                        errorCountWithinSSeconds.put(deviceId, errorCountWithinSSeconds.get(deviceId) - 1);
+                    }
+                } else {
+                    break;
+                }
+            }
+            logs.addLast(log);
+            if("ERROR".equalsIgnoreCase(log.log_level)) {
+                errorCountWithinSSeconds.put(deviceId, errorCountWithinSSeconds.getOrDefault(deviceId, 0) + 1);
             }
         } catch (JMSException e) {
             e.printStackTrace();
@@ -70,20 +121,14 @@ public class LogStatsListener implements MessageListener {
         for(String deviceId : deviceLogs.keySet()) {
             Deque<LogEntry> logs = deviceLogs.get(deviceId);
             int total = logs.size();
-            int errors = 0;
-            int warnings = 0;
-            String lastErrorTime = lastErrorTimeStamp.getOrDefault(deviceId, "No error.");
-            synchronized(logs) {
-                for(LogEntry log : logs) {
-                    if("ERROR".equalsIgnoreCase(log.log_level)) errors++;
-                    else if("WARNING".equalsIgnoreCase(log.log_level)) warnings++;
-                }
-            }
+            int errors = errorCount.getOrDefault(deviceId, 0);
+            int warns = warnCount.getOrDefault(deviceId, 0);
 
             double errorRatio = total > 0 ? (double) errors / total : 0.0;
-            double warningRatio = total > 0 ? (double) warnings / total : 0.0;
+            double warnRatio = total > 0 ? (double) warns / total : 0.0;
+            String lastErrorTime = lastErrorTimestamp.getOrDefault(deviceId, "No error.");
 
-            AnalysisResult analysisResult = new AnalysisResult(deviceId, errorRatio, warningRatio, lastErrorTime);
+            AnalysisResult analysisResult = new AnalysisResult(deviceId, errorRatio, warnRatio, lastErrorTime);
 
             try{
                 String analysisJson = mapper.writeValueAsString(analysisResult);
@@ -92,14 +137,19 @@ public class LogStatsListener implements MessageListener {
                 producer1.send(analysisMsg);
                 System.out.println("Sent analysis result for device: " + deviceId);
 
-                if(errorRatio > 0.5) {
-                    String timeStamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-                    CriticalAlert criticalAlert = new CriticalAlert(deviceId, timeStamp, "ERROR ratio exceeds 50%!");
+                logs = deviceLogsWithinSSeconds.get(deviceId);
+                int totalWithinSSeconds = logs.size();
+                int errorsWithinSseconds = errorCountWithinSSeconds.get(deviceId);
+                double errorRatioWithinSseconds = totalWithinSSeconds > 0 ? (double) errorsWithinSseconds / totalWithinSSeconds : 0.0;
+                if(errorRatioWithinSseconds > 0.5) {
+                    String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                    CriticalAlert criticalAlert = new CriticalAlert(deviceId, timestamp, "ERROR ratio exceeds 50%!");
                     String alertJson = mapper.writeValueAsString(criticalAlert);
                     Message alertMsg = session.createTextMessage(alertJson);
                     producer2.send(alertMsg);
-                    System.out.println("Sent critical alert for device: " + deviceId);
+                    System.out.println("Sent alert result for device: " + deviceId);
                 }
+
             } catch (JsonProcessingException | JMSException e) {
                 e.printStackTrace();
             }
