@@ -16,9 +16,9 @@ public class LogStatsListener implements MessageListener {
     private static final int N = 200;
     private static final int T = 5;
     private static final int S = 1;
+    private final Storage storage;
 
     private Map<String, Deque<LogEntry>> deviceLogs = new ConcurrentHashMap<>();
-    private Map<String, String> lastErrorTimestamp = new ConcurrentHashMap<>();
     private Map<String, Integer> errorCount = new ConcurrentHashMap<>();
     private Map<String, Integer> warnCount = new ConcurrentHashMap<>();
     private Map<String, Deque<LogEntry>> deviceLogsWithinSSeconds = new ConcurrentHashMap<>();
@@ -45,10 +45,11 @@ public class LogStatsListener implements MessageListener {
         }
     }
 
-    public LogStatsListener(Session session, MessageProducer producer1, MessageProducer producer2) throws JMSException {
+    public LogStatsListener(Session session, MessageProducer producer1, MessageProducer producer2, Storage storage) throws JMSException {
         this.session = session;
         this.producer1 = session.createProducer(session.createQueue("analysisResults"));
         this.producer2 = session.createProducer(session.createQueue("criticalAlerts"));
+        this.storage = storage;
 
         Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(this::analyzeAndSend, T, T, TimeUnit.SECONDS);
     }
@@ -84,7 +85,7 @@ public class LogStatsListener implements MessageListener {
 
             if("ERROR".equalsIgnoreCase(log.log_level)) {
                 errorCount.put(deviceId, errorCount.getOrDefault(deviceId, 0) + 1);
-                lastErrorTimestamp.put(deviceId, log.timestamp);
+                storage.updateLastErrorTimestamp(deviceId, log.timestamp);
             } else if("WARN".equalsIgnoreCase(log.log_level)) {
                 warnCount.put(deviceId, warnCount.getOrDefault(deviceId, 0) + 1);
             }
@@ -126,7 +127,7 @@ public class LogStatsListener implements MessageListener {
 
             double errorRatio = total > 0 ? (double) errors / total : 0.0;
             double warnRatio = total > 0 ? (double) warns / total : 0.0;
-            String lastErrorTime = lastErrorTimestamp.getOrDefault(deviceId, "No error.");
+            String lastErrorTime = storage.getLastErrorTimestamp(deviceId);
 
             AnalysisResult analysisResult = new AnalysisResult(deviceId, errorRatio, warnRatio, lastErrorTime);
 
@@ -135,7 +136,6 @@ public class LogStatsListener implements MessageListener {
                 Message analysisMsg = session.createTextMessage(analysisJson);
 
                 producer1.send(analysisMsg);
-                System.out.println("Sent analysis result for device: " + deviceId);
 
                 logs = deviceLogsWithinSSeconds.get(deviceId);
                 int totalWithinSSeconds = logs.size();
@@ -143,11 +143,11 @@ public class LogStatsListener implements MessageListener {
                 double errorRatioWithinSseconds = totalWithinSSeconds > 0 ? (double) errorsWithinSseconds / totalWithinSSeconds : 0.0;
                 if(errorRatioWithinSseconds > 0.5) {
                     String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-                    CriticalAlert criticalAlert = new CriticalAlert(deviceId, timestamp, "ERROR ratio exceeds 50%!");
+                    String msg = String.format("The ERROR rate over the past %d seconds has exceeded 50%%, with a ratio of %d/%d", S, errorsWithinSseconds, totalWithinSSeconds);
+                    CriticalAlert criticalAlert = new CriticalAlert(deviceId, timestamp, msg);
                     String alertJson = mapper.writeValueAsString(criticalAlert);
                     Message alertMsg = session.createTextMessage(alertJson);
                     producer2.send(alertMsg);
-                    System.out.println("Sent alert result for device: " + deviceId);
                 }
 
             } catch (JsonProcessingException | JMSException e) {

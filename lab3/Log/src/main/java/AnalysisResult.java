@@ -1,13 +1,15 @@
 public class AnalysisResult {
     public String device_id;
     public double errorRatio;
-    public double warningRatio;
+    public double warnRatio;
     public String lastErrorTime;
 
-    public AnalysisResult(String device_id, double errorRatio, double warningRatio, String lastErrorTime) {
+    public AnalysisResult() {}
+
+    public AnalysisResult(String device_id, double errorRatio, double warnRatio, String lastErrorTime) {
         this.device_id = device_id;
         this.errorRatio = errorRatio;
-        this.warningRatio = warningRatio;
+        this.warnRatio = warnRatio;
         this.lastErrorTime = lastErrorTime;
     }
 }

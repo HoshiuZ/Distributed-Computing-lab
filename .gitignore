@@ -1,0 +1,33 @@
+# 编译输出
+/bin/
+/target/
+/out/
+
+# 临时文件
+*.log
+*.tmp
+
+# IDE配置文件
+*.iml
+*.ipr
+*.iws
+.idea/
+.vscode/
+
+# Maven / Gradle 缓存
+.mvn/
+.gradle/
+build/
+
+# 操作系统生成的临时文件
+.DS_Store
+Thumbs.db
+
+# 依赖库（如果你有上传外部jar包）
+lib/
+
+# 忽略私密配置
+*.env
+*.properties.local
+
+lab3/Log/pic/

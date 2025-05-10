@@ -67,7 +67,7 @@ public class Publisher {
 
     public static void main(String[] args) throws JMSException {
         if(args.length == 0) {
-            System.out.println("请提供 device_id 作为程序参数。");
+            System.out.println("Please provide the device_id as a program parameter.");
             return;
         }
         Publisher publisher = new Publisher();
